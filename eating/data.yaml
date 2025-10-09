@@ -1,0 +1,8 @@
+path: /data/clearingvehicle/eating/traindata
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 4
+names: ['Drink', 'Food', 'Head', 'Mobile']
+

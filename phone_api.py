@@ -106,13 +106,6 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
 
     print(f"[{stream_name}] heads={len(heads)}, phones={len(phones)}", flush=True)
 
-    # 4) 读取流信息（可选）
-    stream_info = video_streams.get(stream_name, {})
-    stream_source = stream_info.get("stream_source", "")
-    stream_vehicleCode = stream_info.get("stream_vehicleCode", "")
-    stream_vehicleOid = stream_info.get("stream_vehicleOid", "")
-    stream_vehiclePlateNo = stream_info.get("stream_vehiclePlateNo", "")
-    stream_vehicleOrgName = stream_info.get("stream_vehicleOrgName", "")
 
     # 5) 判定逻辑
     calling_heads = []

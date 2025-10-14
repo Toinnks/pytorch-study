@@ -16,6 +16,7 @@ import re
 import os
 import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
 warnings.filterwarnings("ignore")
 
 app = Flask(__name__)
@@ -31,15 +32,28 @@ batch_size = 10  # 每轮处理的视频流数量
 num_threads = 4  # 线程池大小
 video_streams = {}  # 维护所有的 RTSP 直播流信息
 
+# ---- Frame quality screening (丢包/花屏跳过) ----
+GREEN_HUE_LOW = 40  # HSV 绿色范围（近似）
+GREEN_HUE_HIGH = 85
+GREEN_PIX_FRAC_THR = 0.60  # 绿色像素占比阈值
+SAT_THR = 60  # 饱和度下限
+VAL_THR = 60  # 亮度下限
+EDGE_DENSITY_MIN = 0.001  # 边缘密度阈值，过低可能是空帧/糊帧/花屏
+
+IOU_THR = 0.3
+USE_CENTER_FALLBACK = True
+
 
 def read_frame_from_rtsp(rtsp_url, max_retries=3, open_timeout_ms=5000, read_timeout_ms=5000, backoff=1.0):
     """读取 RTSP 单帧，最多重连 max_retries 次；成功返回 RGB 帧，失败返回 None"""
-    import os, time
     # 仅对 FFMPEG 后端生效的超时/传输参数
     opts = [
-        "rtsp_transport;tcp",                          # 用TCP更稳
-        f"stimeout;{open_timeout_ms*1000}",            # 连接超时(微秒)
-        f"timeout;{read_timeout_ms*1000}",             # 读超时(微秒)
+        "rtsp_transport;tcp",  # 用TCP更稳
+        f"stimeout;{open_timeout_ms * 1000}",  # 连接超时(微秒)
+        f"timeout;{read_timeout_ms * 1000}",  # 读超时(微秒)
+        "fflags;discardcorrupt",  # 让解复用器直接丢弃损坏帧
+        "reorder_queue_size;0",  # 降低解码缓存乱序
+        "max_delay;0"  # 降低端到端延迟
     ]
     os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(opts)
 
@@ -53,7 +67,7 @@ def read_frame_from_rtsp(rtsp_url, max_retries=3, open_timeout_ms=5000, read_tim
             if not ok or frame is None:
                 raise RuntimeError("read failed")
             # 返回 RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             print(f"[{rtsp_url}] read ok on attempt {i}")
             return frame
         except Exception as e:
@@ -66,11 +80,48 @@ def read_frame_from_rtsp(rtsp_url, max_retries=3, open_timeout_ms=5000, read_tim
     print(f"[{rtsp_url}] all {max_retries} attempts failed.")
     return None
 
+
+def is_corrupted_or_packet_loss(frame):
+    """
+    更稳健的花屏检测（支持局部绿色块、分区判断）
+    """
+    if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+        return True
+
+    h, w = frame.shape[:2]
+    if h < 32 or w < 32:
+        return True
+
+    small = cv2.resize(frame, (min(160, w), min(90, h)), interpolation=cv2.INTER_AREA)
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    H, S, V = cv2.split(hsv)
+
+    green_mask = (H >= GREEN_HUE_LOW) & (H <= GREEN_HUE_HIGH) & (S >= SAT_THR) & (V >= VAL_THR)
+    green_frac_total = float(np.count_nonzero(green_mask)) / green_mask.size
+
+    # ---- 分区检测（特别针对下半部花屏）----
+    lower_half = green_mask[int(green_mask.shape[0] * 0.5):, :]
+    green_frac_lower = float(np.count_nonzero(lower_half)) / lower_half.size
+
+    gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(gray, 50, 150)
+    edge_density = edges.mean() / 255.0
+
+    # ---- 判定逻辑 ----
+    if (
+            (green_frac_lower > 0.75 and green_frac_lower - green_frac_total > 0.25)  # 下半部绿得多
+            or (green_frac_total > 0.85)  # 整帧全绿
+            or (edge_density < EDGE_DENSITY_MIN)  # 全糊/空帧
+    ):
+        return True
+    return False
+
+
 def detect_frame(stream_name, rtsp_url, frame, conf):
     """目标检测并发送报警"""
 
     global video_streams
-    
+
     # 0) 基础检查
     if frame is None or not isinstance(frame, np.ndarray):
         print(f"[{stream_name}] 读取到的 frame 无效", flush=True)
@@ -85,10 +136,7 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
             print(f"[{stream_name}] 距离上次报警不足5分钟，跳过报警（{int(time_diff)}s）", flush=True)
             return
 
-    # 2) 颜色空间
-    # 如果你的frame来自cv2.VideoCapture，原本就是BGR；你这里用的是RGB->BGR转换。
-    # 如果frame原来就是BGR，这一步会导致颜色错乱，但不至于崩。保留你的写法：
-    frame_bgr = cv2.cvtColor(frame.copy(), cv2.COLOR_RGB2BGR)
+    frame_bgr = frame.copy()
 
     # 3) 推理（Ultralytics 风格）
     results_head = head_model.predict(frame_bgr, conf=conf, verbose=True)[0]
@@ -106,6 +154,13 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
 
     print(f"[{stream_name}] heads={len(heads)}, phones={len(phones)}", flush=True)
 
+    # 4) 读取流信息（可选）
+    stream_info = video_streams.get(stream_name, {})
+    stream_source = stream_info.get("stream_source", "")
+    stream_vehicleCode = stream_info.get("stream_vehicleCode", "")
+    stream_vehicleOid = stream_info.get("stream_vehicleOid", "")
+    stream_vehiclePlateNo = stream_info.get("stream_vehiclePlateNo", "")
+    stream_vehicleOrgName = stream_info.get("stream_vehicleOrgName", "")
 
     # 5) 判定逻辑
     calling_heads = []
@@ -128,16 +183,17 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
         ly1 = hy1 + head_h * 0.2
         ly2 = hy2 + head_h * 0.4
 
-
         for phone_box in phones:
             px1, py1, px2, py2 = phone_box
+
             phone_w = px2 - px1
             phone_h = py2 - py1
             phone_area = phone_w * phone_h
 
             if head_area <= phone_area:
-                print(f"人头框 <= 手机框，跳过")
+                print(f"人头框面积{head_area} <= 手机框面积{phone_area}，跳过")
                 continue
+
             cx, cy = (px1 + px2) / 2.0, (py1 + py2) / 2.0
 
             # 叠加比例
@@ -146,23 +202,22 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
             ) / (max((px2 - px1) * (py2 - py1), 1e-6))
 
             in_ear = (
-                ((rx1 <= cx <= rx2 and ry1 <= cy <= ry2) or
-                    (lx1 <= cx <= lx2 and ly1 <= cy <= ly2)) and
-                overlap_ratio > 0.2 and
-                cy < hy2
+                    ((rx1 <= cx <= rx2 and ry1 <= cy <= ry2) or
+                     (lx1 <= cx <= lx2 and ly1 <= cy <= ly2)) and
+                    overlap_ratio > 0.2 and
+                    cy < hy2
             )
-
 
             in_face = is_phone_in_head(
                 (px1, py1, px2, py2), (hx1, hy1, hx2, hy2)
             ) and cy < hy2 + head_h * 0.2
 
             if in_ear or in_face:
-                cv2.rectangle(frame_bgr, (int(px1), int(py1)), (int(px2), int(py2)),(0, 0, 255), 2)  # 红色手机框
-                cv2.putText(frame_bgr, "PHONE", (int(px1), max(0, int(py1) - 5)),cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                cv2.rectangle(frame_bgr, (int(px1), int(py1)), (int(px2), int(py2)), (0, 0, 255), 2)  # 红色手机框
+                cv2.putText(frame_bgr, "PHONE", (int(px1), max(0, int(py1) - 5)), cv2.FONT_HERSHEY_SIMPLEX, 0.6,
+                            (0, 0, 255), 2)
                 calling_heads.append(idx_h)
                 break
-
 
     # 7) 无报警则返回
     if not calling_heads:
@@ -173,7 +228,7 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
             print(f"[{stream_name}] 未检测到打电话行为，跳过", flush=True)
         return
     # 生成报警文件名
-    
+
     alarm_time = now.strftime('%Y-%m-%d_%H-%M-%S')
     alarm_filename = f"{stream_name}-{alarm_time}-phone.jpg"
     alarm_filepath = f"/data/clearingvehicle/pic_vid/phone/alarmpic/{alarm_filename}"
@@ -186,7 +241,7 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
 
     # 保存图片并生成报警
     cv2.imwrite(alarm_filepath, frame_bgr)
-    
+
     # 创建报警数据
     payload = {
         "alarmName": "phone",
@@ -199,7 +254,7 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
         "cameraCode": stream_vehicleCode,
         "oid": stream_vehicleOid,
         "alarmCode": stream_vehiclePlateNo,
-        "stream_vehicleOrgName":stream_vehicleOrgName
+        "stream_vehicleOrgName": stream_vehicleOrgName
     }
     print(f"-----------------------完整payload----------------------: {payload}")
     send_alarm(payload, [send_url1, send_url2], stream_name, 1)
@@ -207,8 +262,6 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
 
     # 更新报警时间
     video_streams[stream_name]["last_alarm_time"] = now
-    
-
 
 
 def is_phone_in_head(phone_box, head_box, threshold=0.4):
@@ -230,6 +283,7 @@ def box_overlap_area(a, b):
         return 0
     return (inter_x2 - inter_x1) * (inter_y2 - inter_y1)
 
+
 def save_alarm_video(video_filename, rtsp_url):
     """使用 FFmpeg 在后台线程中录制 5 秒报警视频"""
     video_output_file = f'/data/clearingvehicle/pic_vid/phone/alarmvideo/{video_filename}'
@@ -240,12 +294,14 @@ def save_alarm_video(video_filename, rtsp_url):
         "-vf", "scale=704:576",
         "-c:v", "libx264",
         "-preset", "ultrafast",
-        "-an",                      
+        "-an",
         "-movflags", "+faststart",
         video_output_file
     ]
+
     def run_ffmpeg():
         subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
     # 以后台线程执行 FFmpeg 录制，避免阻塞主线程
     threading.Thread(target=run_ffmpeg, daemon=True).start()
 
@@ -264,7 +320,7 @@ def send_alarm(payload, urls, stream_name, event_count, timeout=10, retries=1, m
         last_err = None
         for attempt in range(retries + 1):
             try:
-                print(f"[{stream_name}] -> 正在向 {url} 发送报警 (第 {attempt+1}/{retries+1} 次尝试)")
+                print(f"[{stream_name}] -> 正在向 {url} 发送报警 (第 {attempt + 1}/{retries + 1} 次尝试)")
                 resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
                 status = resp.status_code
                 if 200 <= status < 300:
@@ -295,7 +351,6 @@ def send_alarm(payload, urls, stream_name, event_count, timeout=10, retries=1, m
     return results
 
 
-
 def process_batch(stream_batch, video_streams):
     """批量处理一组视频流"""
     for stream_name in stream_batch:
@@ -309,6 +364,10 @@ def process_batch(stream_batch, video_streams):
         frame = read_frame_from_rtsp(input_stream["input_stream"])
         if frame is None:
             print(f"[{stream_name}] 读取视频帧失败")
+            continue
+
+        if is_corrupted_or_packet_loss(frame):
+            print(f"[{stream_name}] 检测到疑似丢包/绿色花屏，跳过本帧算法检测")
             continue
 
         detect_frame(stream_name, input_stream["input_stream"], frame, conf)
@@ -327,19 +386,21 @@ def process_video_streams(video_streams):
 
             # 分批次处理
             for i in range(0, len(active_streams), batch_size):
-                stream_batch = active_streams[i:i+batch_size]
+                stream_batch = active_streams[i:i + batch_size]
                 executor.submit(process_batch, stream_batch, video_streams)
 
             time.sleep(polling_interval)
+
 
 @app.route('/streams/status', methods=['POST'])
 def get_video_stream_status():
     """查询正在检测的视频流"""
     if not video_streams:
         return jsonify({"message": "没有正在检测的视频流"}), 200
-    
+
     active_streams = list(video_streams.keys())  # 获取所有正在检测的视频流的名称
     return jsonify({"active_video_streams": active_streams}), 200
+
 
 @app.route('/streams/add', methods=['POST'])
 def add_streams():
@@ -348,16 +409,16 @@ def add_streams():
     streams = data.get('streams', [])
     conf = data.get('conf', 0.5)
 
-    if not streams or not isinstance(streams, list) or not isinstance(conf, float):
+    if not streams or not isinstance(streams, list) or not isinstance(conf, (int, float)):
         return jsonify({"error": "Invalid streams format"}), 400
 
     for stream in streams:
         stream_name = stream.get('stream_name')
         input_stream = stream.get('input_stream')
-        stream_source = stream.get('stream_source')   # 车来源 hik、rm
+        stream_source = stream.get('stream_source')  # 车来源 hik、rm
         stream_vehicleCode = stream.get('stream_vehicleCode')  # 车辆编码
-        stream_vehicleOid = stream.get('stream_vehicleOid') # 车辆oid
-        stream_vehiclePlateNo = stream.get('stream_vehiclePlateNo')  #车牌号
+        stream_vehicleOid = stream.get('stream_vehicleOid')  # 车辆oid
+        stream_vehiclePlateNo = stream.get('stream_vehiclePlateNo')  # 车牌号
 
         if not stream_name or not input_stream:
             continue
@@ -370,11 +431,12 @@ def add_streams():
             "conf": conf,
             "stream_source": stream_source,  # 存储车来源 hik、rm
             "stream_vehicleCode": stream_vehicleCode,  # 存储车辆编码
-            "stream_vehicleOid":stream_vehicleOid,   # 车辆oid
-            "stream_vehiclePlateNo":stream_vehiclePlateNo    #车牌号
+            "stream_vehicleOid": stream_vehicleOid,  # 车辆oid
+            "stream_vehiclePlateNo": stream_vehiclePlateNo  # 车牌号
         }
 
     return jsonify({"status": "Streams added", "streams": list(video_streams.keys())}), 200
+
 
 @app.route('/streams/delete', methods=['POST'])
 def delete_streams():
@@ -391,83 +453,6 @@ def delete_streams():
 
     return jsonify({"status": "Streams deleted"}), 200
 
-
-# 维护所有推流任务的字典
-stream_threads = {}
-stream_controls = {}
-
-@app.route('/live/start', methods=['POST'])
-def start_stream():
-    success_add_lst = []
-    data = request.get_json()
-    streams = data.get('streams')
-    if not streams or not isinstance(streams, list):
-        return jsonify({"error": "Invalid streams format, must be a list"}), 400
-    
-    for stream in streams:
-        stream_name = stream.get("stream_name")
-        input_stream = stream.get("input_stream")
-        stream_source = stream.get('stream_source')   # 车来源 hik、rm
-        stream_vehicleCode = stream.get('stream_vehicleCode')  # 车辆编码
-        stream_vehicleOid = stream.get('stream_vehicleOid') # 车辆oid
-        stream_vehiclePlateNo = stream.get('stream_vehiclePlateNo')  #车牌号
-        stream_vehicleOrgName = stream.get('stream_vehicleOrgName') #车辆所属公
-
-        if not stream_name or not input_stream:
-            return jsonify({"error": "缺少 stream_name 或 input_stream"}), 400
-
-        if stream_name in stream_threads:
-            return jsonify({"error": f"流 {stream_name} 已在推流"}), 400
-
-        # 控制变量，动态启停推流
-        stream_controls[stream_name] = {
-            "is_live_stream": True,
-            "stream_source": stream_source,  # 存储车来源 hik、rm
-            "stream_vehicleCode": stream_vehicleCode,  # 存储车辆编码
-            "stream_vehicleOid":stream_vehicleOid,   # 车辆oid
-            "stream_vehiclePlateNo":stream_vehiclePlateNo,   #车牌号
-            "stream_vehicleOrgName":stream_vehicleOrgName #所属公司
-            }
-
-        # 创建并启动推流线程
-        thread = threading.Thread(target=ffmpeg_live, args=(model, stream_name, input_stream, stream_controls), daemon=True)
-        thread.start()
-        
-        stream_threads[stream_name] = thread
-        success_add_lst.append(stream_name)
-
-    return jsonify({"message": f"推流{str('、'.join(success_add_lst))}已启动"}), 200
-
-@app.route('/live/stop', methods=['POST'])
-def stop_stream():
-    success_delete_lst = []
-    error_lst = []
-    data = request.json
-    stream_names = data.get('stream_names')  # 接收一个流名称列表
-
-    if not stream_names or not isinstance(stream_names, list):
-        return jsonify({"error": "Invalid stream_names format, must be a list"}), 400
-    
-    for stream_name in stream_names:
-        if not stream_name or stream_name not in stream_threads or stream_name not in stream_controls:
-            error_lst.append(stream_name)
-            continue
-
-        # 关闭推流 & 检测
-        stream_controls[stream_name]["is_live_stream"] = False
-        time.sleep(2)
-
-        # 停止推流线程
-        stream_threads[stream_name].join()  # 等待线程完成
-        del stream_threads[stream_name]
-        del stream_controls[stream_name]
-        success_delete_lst.append(stream_name)
-    if len(error_lst) == 0:
-        return jsonify({"message": f"推流 {str('、'.join(success_delete_lst))} 已停止"}), 200
-    elif len(success_delete_lst) == 0:
-        return jsonify({"error": f"流 {str('、'.join(error_lst))} 不在推流"}), 200
-    else:
-        return jsonify({"message": f"推流 {str('、'.join(success_delete_lst))} 已停止","error": f"流 {str('、'.join(error_lst))} 不在推流"}), 200
 
 if __name__ == '__main__':
     video_streams = {}

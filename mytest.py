@@ -1,6 +1,6 @@
 import datetime
 
-import  cv2
+import cv2
 import pytz
 
 
@@ -22,3 +22,8 @@ naive = datetime.datetime.strptime(time_str, '%Y-%m-%d-%H-%M-%S')
 dt=pytz.timezone('Asia/Shanghai').localize(naive)
 temp=(get_now()-dt).total_seconds()
 print(temp)
+
+if head_area <= phone_area:
+
+    print(f"人头框面积{head_area} <= 手机框面积{phone_area}，跳过")
+    continue

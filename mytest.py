@@ -14,16 +14,6 @@ import pytz
 # if not ok:
 #     print("帧错误")
 # cv2.imwrite('frame.jpg',frame)
-def get_now():
-    now = datetime.datetime.now(pytz.timezone('Asia/Shanghai'))
-    return now
-time_str = "2025-10-11-19-58-54"
-naive = datetime.datetime.strptime(time_str, '%Y-%m-%d-%H-%M-%S')
-dt=pytz.timezone('Asia/Shanghai').localize(naive)
-temp=(get_now()-dt).total_seconds()
-print(temp)
-
-if head_area <= phone_area:
-
-    print(f"人头框面积{head_area} <= 手机框面积{phone_area}，跳过")
-    continue
+a=100
+b=8
+print(a//b)

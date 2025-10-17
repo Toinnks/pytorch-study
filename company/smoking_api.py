@@ -154,13 +154,27 @@ def detect_frame(stream_name, rtsp_url, frame, conf):
     smoke_with_people = []      # [(smoke, [persons...]), ...]
     for s in smoke_boxes:
         sx1, sy1, sx2, sy2 = s["box"]
+
+        smoke_w = sx2 - sx1
+        smoke_h = sy2 - sy1
+        smoke_area = smoke_w * smoke_h
+
         ex1, ey1, ex2, ey2 = _expand_box(sx1, sy1, sx2, sy2, W, H, expand_ratio=NEARBY_EXPAND_RATIO)
         expanded = (ex1, ey1, ex2, ey2)
 
         near_persons = []
         for p in person_boxes:
-            if _has_intersection(expanded, p["box"]):
-                near_persons.append(p)
+
+            px1, py1, px2, py2 = p["box"]
+            p_w = px2 - px1
+            p_h = py2 - py1
+            p_area = p_w * p_h
+            if smoke_area < p_area*0.6:
+                if _has_intersection(expanded, p["box"]):
+                    near_persons.append(p)
+            else:
+                print("烟的面积大于人面积的60%")
+
 
         if len(near_persons) > 0:
             smoke_with_people.append((s, near_persons))

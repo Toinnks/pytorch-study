@@ -61,5 +61,5 @@ class TrainDatasetProcess(object):
                 shutil.copy2(dst_path, src_path)
 
 
-s1=TrainDatasetProcess(src_folder_path=r"C:\Users\sgy\Desktop\1")
-s1.copy_folder_to_src(need_copy_folder=r"C:\Users\sgy\Desktop\2")
+s1=TrainDatasetProcess(src_folder_path=r"D:\edgeDownloads\Mobile detection.v1i.yolov8\valid\labels")
+s1.copy_folder_to_src(need_copy_folder=r"D:\edgeDownloads\phone.v1i.yolov8\valid\labels")

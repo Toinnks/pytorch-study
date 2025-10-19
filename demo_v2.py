@@ -8,6 +8,8 @@ from ultralytics import YOLO
 import cv2
 import numpy as np
 import pytz
+import flask
+app = flask.Flask(__name__)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,10 +23,10 @@ model = YOLO(model_path)
 
 # video_streams是一个字典，用来存储视频流编号和流信息,key是该视频流的名称，值是一个VideoStream对象
 class VideoStream:
-    def __init__(self, video_stream_rtsp_url=None, video_alarm_time=None, video_link_time=None, video_desc=None,
+    def __init__(self, video_stream_rtsp_url=None, video_link_time=None, video_desc=None,
                  video_source=None, conf=0.5, video_alarm_diff=300):
         self.video_stream_rtsp_url = video_stream_rtsp_url
-        self.video_alarm_time = video_alarm_time
+        self.video_alarm_time = None
         self.video_link_time = video_link_time
         self.video_desc = video_desc
         self.video_source = video_source
@@ -39,6 +41,47 @@ class VideoStream:
         self.video_source = None
         self.conf = 0.5
         self.video_alarm_diff = 300
+
+
+class FrameReader(threading.Thread):
+    def __init__(self, name, rtsp_url, buffer_size=1):
+        super().__init__(daemon=True)
+        self.name = name
+        self.rtsp_url = rtsp_url
+        self.cap = cv2.VideoCapture(rtsp_url, cv2.CAP_FFMPEG)
+        self.frame_lock = threading.Lock()
+        self.latest_frame = None
+        self.stopped = False
+        self.buffer_size = buffer_size
+
+    def run(self):
+        retry = 0
+        logging.info(f"[{self.name}] 启动视频流读取线程")
+        while not self.stopped:
+            ok, frame = self.cap.read()
+            if not ok:
+                retry = retry + 1
+                if retry > 3:
+                    logging.warning(f"[{self.name}]  读取失败，退出读取...")
+                    self.latest_frame = None
+                    break
+                logging.warning(f"[{self.name}] 第{retry}次 读取失败，尝试重连...")
+                time.sleep(2)
+                self.cap.release()
+                self.cap = cv2.VideoCapture(self.rtsp_url, cv2.CAP_FFMPEG)
+                continue
+            with self.frame_lock:
+                self.latest_frame = frame
+            time.sleep(0.03)  # 控制读取帧率
+
+    def get_latest_frame(self):
+        with self.frame_lock:
+            return self.latest_frame.copy() if self.latest_frame is not None else None
+
+    def stop(self):
+        self.stopped = True
+        self.cap.release()
+        logging.info(f"[{self.name}] 读取线程结束")
 
 def get_now():
     now = datetime.datetime.now(pytz.timezone('Asia/Shanghai'))
@@ -101,65 +144,15 @@ def detect_frame(frame, video_stream: VideoStream):
     cv2.imwrite(f"alarm_pic\\{now}.jpg", img_copy)
 
 
-def read_frame_from_rtsp(video_stream_rtsp_url, max_retries=3):
-    opts = [
-        "rtsp_transport;tcp",  # 用TCP更稳
-        f"stimeout;{5000 * 1000}",  # 连接超时(微秒)
-        f"timeout;{5000 * 1000}",  # 读超时(微秒)
-    ]
-    os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(opts)
-
-    for i in range(1, max_retries + 1):
-        cap = None
-        try:
-            cap = cv2.VideoCapture(video_stream_rtsp_url, cv2.CAP_FFMPEG)
-            if not cap.isOpened():
-                raise RuntimeError(f"{video_stream_rtsp_url}第{i}次打开失败")
-            ok, frame = cap.read()
-            if not ok or frame is None:
-                raise RuntimeError(f"{video_stream_rtsp_url}第{i}次读失败")
-            # 返回 RGB
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            logging.info(f"[{video_stream_rtsp_url}] 在第{i}次读成功")
-            os.makedirs('read_pic', exist_ok=True)
-            now = get_now().strftime('%Y-%m-%d-%H-%M-%S')
-            cv2.imwrite(f"read_pic\\{now}.jpg", frame)
-            return frame
-        except Exception as e:
-            print(f"[{video_stream_rtsp_url}] 第{i}次/{max_retries}失败: {e}")
-            time.sleep(1.0 * i)  # 1s, 2s, 3s...
-        finally:
-            if cap is not None:
-                cap.release()
-
-    logging.error(f"[{video_stream_rtsp_url}]在{max_retries}次全失败")
-    return None
-
-
-def process_batch_video_stream(batch_video_streams_list):
-    for item in batch_video_streams_list:
-        temp = video_streams[item]
-        if temp.video_stream_rtsp_url is None:
-            continue
-        # 先读一帧
-        frame = read_frame_from_rtsp(temp.video_stream_rtsp_url)
-        if frame is None:
-            logging.warning(f"于{get_now()}读取{item}的一帧失败")
-        # 对该帧进行处理
-        detect_frame(frame, video_streams[item])
-
-
-def detect_video_stream(video_streams):
+def detect_video_stream(video_streams,video_readers):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         while True:
-            activate_video_streams_list = list(video_streams.keys())
-            if activate_video_streams_list is None:
-                logging.warning('未发现任何视频流信息')
-                continue
-            logging.info(f"发现了{len(activate_video_streams_list)}视频流")
-            for i in range(0, len(activate_video_streams_list), batch_size):
-                batch_video_streams_list = activate_video_streams_list[i:i + batch_size]
-                executor.submit(process_batch_video_stream, batch_video_streams_list)
+            for key, reader in video_readers.items():
+                frame = reader.get_latest_frame()
+                if frame is not None:
+                    executor.submit(detect_frame, frame, video_streams[key])
+                else:
+                    logging.info('帧错误！！！')
             logging.info('等待10秒')
             time.sleep(10)
 
@@ -167,14 +160,15 @@ def detect_video_stream(video_streams):
 if __name__ == '__main__':
     video_readers = {}
     video_streams = {}
-    video_thread = threading.Thread(target=detect_video_stream, args=(video_streams,), daemon=True)
-    video = VideoStream()
+    video_thread = threading.Thread(target=detect_video_stream, args=(video_streams,video_readers,), daemon=True)
+    video = VideoStream(video_stream_rtsp_url=r"D:\edgeDownload\33007863281-1-100024.mp4",
+                        video_link_time=get_now().strftime('%Y-%m-%d-%H-%M-%S'),video_alarm_diff=8)
     # video.video_stream_rtsp_url='rtsp://rtspstream:abf3N_azEvzgsMF3TE224@zephyr.rtsp.stream/people'
-    video.video_stream_rtsp_url = r"D:\edgeDownload\抖音-记录美好生活 (1).mp4"
-    video.video_link_time = get_now()
-    video.video_source = "自己添加"
-    video.video_alarm_diff = 30
-    video.video_desc = '111'
     video_streams[1] = video
+    reader = FrameReader("stream1", video.video_stream_rtsp_url)
+    video_readers[1] = reader
+    reader.start()
     video_thread.start()
-    input("按回车键退出程序...\n")  # 阻塞主线程
+    input("按回车键退出程序...\n")
+    for reader in video_readers.values():
+        reader.stop()

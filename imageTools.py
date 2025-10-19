@@ -6,7 +6,7 @@ from torch.utils.data import Dataset
 
 
 class TrainDatasetProcess(object):
-    image_end = ['png', 'jpg', 'jpeg']
+    image_end = [".jpg", ".jpeg", ".png", ".bmp"]
     """train_folder_path = None, test_folder_path = None, valid_folder_path = None,
     train_images_path = None, test_images_path = None, valid_images_path = None, train_labels_path = None,
     test_labels_path = None, valid_labels_path = None"""
@@ -73,8 +73,10 @@ class TrainDatasetProcess(object):
         for label_file in os.listdir(label_dir):
             if not label_file.endswith(".txt"):
                 continue
+
             label_path = os.path.join(label_dir, label_file)
             base_name = os.path.splitext(label_file)[0]
+
             # 1.1 如果标注文件大小为0 → 删除标注和对应图片
             if os.path.getsize(label_path) == 0:
                 print(f"删除无效标注文件: {label_path}")
@@ -86,17 +88,22 @@ class TrainDatasetProcess(object):
                         print(f"删除对应无效图片: {img_path}")
                         os.remove(img_path)
                         break
-        # 2. 遍历图片文件夹，检查是否有对应标注
+
+            # 2. 遍历图片文件夹，检查是否有对应标注
         for img_file in os.listdir(img_dir):
             img_path = os.path.join(img_dir, img_file)
             base_name, ext = os.path.splitext(img_file)
+
             if ext.lower() not in self.image_end:
                 continue
+
             label_path = os.path.join(label_dir, base_name + ".txt")
+
             # 2.1 如果没有对应标注文件 → 删除图片
             if not os.path.exists(label_path):
                 print(f"删除无标注的图片: {img_path}")
                 os.remove(img_path)
+
             # 2.2 如果标注文件存在但是已经被删除(0B情况处理过) → 图片也删掉
             elif not os.path.exists(img_path):
                 print(f"图片已被删除，无需处理: {img_file}")

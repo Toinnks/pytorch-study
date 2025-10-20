@@ -1,8 +1,8 @@
 import os
 import random
 import shutil
+from tqdm import tqdm
 
-from torch.utils.data import Dataset
 
 
 class TrainDatasetProcess(object):
@@ -156,7 +156,7 @@ class TrainDatasetProcess(object):
         # 收集所有有效图片（必须有对应标签）
         all_images = []
         for f in os.listdir(img_dir):
-            if f.lower().endswith(self.image_end):
+            if f.lower().endswith(tuple(self.image_end)):
                 name = os.path.splitext(f)[0]
                 label_path = os.path.join(label_dir, name + ".txt")
                 if os.path.exists(label_path):
@@ -179,7 +179,7 @@ class TrainDatasetProcess(object):
         }
 
         # 定义复制函数
-        def copy_files(img_list: List[str], img_dest: str, lbl_dest: str, phase: str):
+        def copy_files(img_list: list[str], img_dest: str, lbl_dest: str, phase: str):
             img_copied = 0
             lbl_copied = 0
             lbl_missing = 0
@@ -219,3 +219,9 @@ class TrainDatasetProcess(object):
 
         print(f"输出路径: {os.path.abspath(output_dir)}\n")
         return stats
+
+s1=TrainDatasetProcess(r"D:\edgeDownloads\project-80-at-2025-10-20-03-17-57a5946a\images")
+s1.clean_imgdir_by_labeldir(label_dir=r"D:\edgeDownloads\project-80-at-2025-10-20-03-17-57a5946a\labels")
+# s1.split_to_train_valid_test(img_dir=r"D:\dingdingDownloads\phone_data_own\train\images",
+#                              label_dir=r"D:\dingdingDownloads\phone_data_own\train\labels",
+#                              output_dir=r"D:\dingdingDownloads\set",split_list=[0.5, 0.3, 0.2])

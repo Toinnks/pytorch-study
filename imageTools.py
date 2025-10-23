@@ -3,20 +3,20 @@ import random
 import shutil
 from tqdm import tqdm
 
+"""train_folder_path = None, test_folder_path = None, valid_folder_path = None,
+train_images_path = None, test_images_path = None, valid_images_path = None, train_labels_path = None,
+test_labels_path = None, valid_labels_path = None"""
 
 
 class TrainDatasetProcess(object):
-    image_end = [".jpg", ".jpeg", ".png", ".bmp"]
-    """train_folder_path = None, test_folder_path = None, valid_folder_path = None,
-    train_images_path = None, test_images_path = None, valid_images_path = None, train_labels_path = None,
-    test_labels_path = None, valid_labels_path = None"""
+    image_end = (".jpg", ".jpeg", ".png", ".bmp")
 
-    def __init__(self, src_folder_path):
-        self.src_folder_path = src_folder_path
+    def __init__(self, folder_path=None):
+        self.folder_path = folder_path
 
     def remove_image_from_include_str(self, key: str):
-        # 若在父文件夹下的图片名中有key字符，则移除该图片
-        folder_path = self.src_folder_path
+        # 若在folder_path文件夹下的图片名中有key字符，则移除该图片
+        folder_path = self.folder_path
         for filename in os.listdir(folder_path):
             if key in filename:
                 file_path = os.path.join(folder_path, filename)
@@ -24,34 +24,12 @@ class TrainDatasetProcess(object):
                 print(f"已删除: {filename}")
         print(f"{folder_path}清理完成！")
 
-    def judge_folder(self, is_train: bool, is_test: bool, is_valid: bool):
-        train_child_folder = None
-        test_child_folder = None
-        valid_child_folder = None
-        child_folder = os.listdir(self.src_folder_path)
-        for i in child_folder:
-            if 'train' in i:
-                train_child_folder = os.path.join(self.src_folder_path, i)
-            if 'test' in i:
-                test_child_folder = os.path.join(self.src_folder_path, i)
-            if 'valid' in i:
-                valid_child_folder = os.path.join(self.src_folder_path, i)
-        if is_test and test_child_folder is None:
-            print("test文件夹不存在")
+    def copy_folder_to_src(self, src_folder_path: str, need_copy_folder: str):
 
-        if is_train and train_child_folder is None:
-            print("train文件夹不存在")
+        # 将need_copy_folder文件夹中的文件复制到self.folder_path文件夹中
 
-        if is_valid and valid_child_folder is None:
-            print("valid文件夹不存在")
-
-    def copy_folder_to_src(self, need_copy_folder: str):
-
-        # 将need_copy_folder文件夹中的文件复制到self.src_folder_path文件夹中
-
-        src = self.src_folder_path
         for item in os.listdir(need_copy_folder):
-            src_path = os.path.join(src, item)
+            src_path = os.path.join(src_folder_path, item)
             dst_path = os.path.join(need_copy_folder, item)
 
             if os.path.isdir(dst_path):
@@ -61,53 +39,60 @@ class TrainDatasetProcess(object):
                 # 如果是文件，直接复制
                 shutil.copy2(dst_path, src_path)
 
-    def clean_imgdir_by_labeldir(self, label_dir: str):
+    def clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str):
         """
-        通过label_dir文件夹中的标注文件txt，来删除img_dir = self.src_folder_path中的无效图片
-        判断条件：
-        1、txt文件大小为0kb为无效标注文件txt，会删除txt文件的同时删除对应图片
-        2、图片没有对应txt标注文件的话会删除
-        """
-        img_dir = self.src_folder_path
-        # 1. 遍历标注文件夹
-        for label_file in os.listdir(label_dir):
-            if not label_file.endswith(".txt"):
-                continue
+           清理图片和标注文件的无效对应关系：
+           1. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
+           2. 删除没有对应标注文件的图片
+           3. 删除没有对应图片的标注文件
+       """
+        # 获取所有图片和标注文件名（去除扩展名）
+        img_files = [f for f in os.listdir(img_dir) if os.path.splitext(f)[1].lower() in self.image_end]
+        label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
 
+        img_basenames = {os.path.splitext(f)[0] for f in img_files}
+        label_basenames = {os.path.splitext(f)[0] for f in label_files}
+
+        # --- Step 1: 删除空标注文件及其对应图片 ---
+        for label_file in label_files:
             label_path = os.path.join(label_dir, label_file)
             base_name = os.path.splitext(label_file)[0]
 
-            # 1.1 如果标注文件大小为0 → 删除标注和对应图片
             if os.path.getsize(label_path) == 0:
-                print(f"删除无效标注文件: {label_path}")
+                print(f" 删除空标注文件: {label_path}")
                 os.remove(label_path)
 
+                # 删除对应图片（匹配任意后缀）
                 for ext in self.image_end:
                     img_path = os.path.join(img_dir, base_name + ext)
                     if os.path.exists(img_path):
-                        print(f"删除对应无效图片: {img_path}")
+                        print(f"️ 删除对应图片: {img_path}")
                         os.remove(img_path)
                         break
 
-            # 2. 遍历图片文件夹，检查是否有对应标注
-        for img_file in os.listdir(img_dir):
-            img_path = os.path.join(img_dir, img_file)
-            base_name, ext = os.path.splitext(img_file)
+        # 重新获取有效文件列表（避免上一步删除后仍处理）
+        img_files = [f for f in os.listdir(img_dir) if os.path.splitext(f)[1].lower() in self.image_end]
+        label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
+        img_basenames = {os.path.splitext(f)[0] for f in img_files}
+        label_basenames = {os.path.splitext(f)[0] for f in label_files}
 
-            if ext.lower() not in self.image_end:
-                continue
+        # --- Step 2: 删除没有标注文件的图片 ---
+        for base_name in img_basenames - label_basenames:
+            for ext in self.image_end:
+                img_path = os.path.join(img_dir, base_name + ext)
+                if os.path.exists(img_path):
+                    print(f" 删除无标注图片: {img_path}")
+                    os.remove(img_path)
+                    break
 
+        # --- Step 3: 删除没有图片的标注文件 ---
+        for base_name in label_basenames - img_basenames:
             label_path = os.path.join(label_dir, base_name + ".txt")
+            if os.path.exists(label_path):
+                print(f"️ 删除无图片标注文件: {label_path}")
+                os.remove(label_path)
 
-            # 2.1 如果没有对应标注文件 → 删除图片
-            if not os.path.exists(label_path):
-                print(f"删除无标注的图片: {img_path}")
-                os.remove(img_path)
-
-            # 2.2 如果标注文件存在但是已经被删除(0B情况处理过) → 图片也删掉
-            elif not os.path.exists(img_path):
-                print(f"图片已被删除，无需处理: {img_file}")
-                continue
+        print(" 清理完成。")
 
     def split_to_train_valid_test(self, img_dir: str, label_dir: str, output_dir: str,
                                   split_list: list[float] = None, seed: int = 42
@@ -213,15 +198,66 @@ class TrainDatasetProcess(object):
             img_dest, lbl_dest = dirs[phase]
             stats[phase] = copy_files(img_list, img_dest, lbl_dest, phase)
 
-        print("\n=== ✅ 数据集分割完成 ===")
+        print("\n=== 数据集分割完成 ===")
         for phase, (n_img, n_lbl, n_miss) in stats.items():
             print(f"{phase:5s}: 图片 {n_img}, 标签 {n_lbl}, 缺失标签 {n_miss}")
 
         print(f"输出路径: {os.path.abspath(output_dir)}\n")
         return stats
 
-s1=TrainDatasetProcess(r"D:\edgeDownloads\project-80-at-2025-10-20-03-17-57a5946a\images")
-s1.clean_imgdir_by_labeldir(label_dir=r"D:\edgeDownloads\project-80-at-2025-10-20-03-17-57a5946a\labels")
-# s1.split_to_train_valid_test(img_dir=r"D:\dingdingDownloads\phone_data_own\train\images",
-#                              label_dir=r"D:\dingdingDownloads\phone_data_own\train\labels",
-#                              output_dir=r"D:\dingdingDownloads\set",split_list=[0.5, 0.3, 0.2])
+    def auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_thresh: float = 0.5):
+        """
+        使用YOLOv8模型为未标注图片自动生成伪标签(txt格式)。
+        参数:
+            model_path: str
+                模型路径 (例如 'best.pt')
+            image_dir: str
+                未标注图片所在文件夹路径
+            output_label_dir: str
+                输出txt标签的文件夹路径
+            conf_thresh: float, 默认0.5
+                置信度阈值（过滤低置信度框）
+        """
+        os.makedirs(output_label_dir, exist_ok=True)
+        model = YOLO(model_path)
+
+        image_files = [
+            f for f in os.listdir(image_dir)
+            if f.lower().endswith(self.image_end)
+        ]
+
+        print(f" 共检测到 {len(image_files)} 张图片，开始自动标注...")
+        first = True
+        for img_name in tqdm(image_files, desc="自动标注中"):
+            img_path = os.path.join(image_dir, img_name)
+            results = model.predict(img_path, conf=conf_thresh, verbose=False)
+            result = results[0]
+            boxes = result.boxes.xywhn
+            classes = result.boxes.cls
+            names = result.names
+
+            if first:
+                with open(os.path.join(output_label_dir, "classes.txt"), "w") as f:
+                    for key, value in names.items():
+                        f.write(f"{value}\n")
+                first = False
+
+            label_path = os.path.join(
+                output_label_dir,
+                os.path.splitext(img_name)[0] + ".txt"
+            )
+
+            with open(label_path, "w") as f:
+                for box, cls in zip(boxes, classes):
+                    f.write(f"{int(cls)} {box[0]:.6f} {box[1]:.6f} "
+                            f"{box[2]:.6f} {box[3]:.6f}\n")
+
+        print(" 自动标注完成！")
+        print(f" 生成标签目录: {output_label_dir}")
+
+
+s1 = TrainDatasetProcess()
+s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\train-label\images", label_dir=r"D:\dataset\train-label\labels")
+# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-data-all\images",
+#                              label_dir=r"D:\dataset\phone-data-all\labels",
+#                              output_dir=r"D:\dataset\phone-v3-1022",split_list=[0.7, 0.2, 0.1])

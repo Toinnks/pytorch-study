@@ -257,7 +257,6 @@ class TrainDatasetProcess(object):
 
 
 s1 = TrainDatasetProcess()
-s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\train-label\images", label_dir=r"D:\dataset\train-label\labels")
-# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-data-all\images",
-#                              label_dir=r"D:\dataset\phone-data-all\labels",
-#                              output_dir=r"D:\dataset\phone-v3-1022",split_list=[0.7, 0.2, 0.1])
+# s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels")
+s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels",
+                             output_dir=r"D:\dataset\phone-v5-1024",split_list=[0.7, 0.2, 0.1])

@@ -303,10 +303,10 @@ if __name__ == "__main__":
     model_path = r"C:\Users\26601\Desktop\best.pt"  # 替换为你的模型路径
     model = YOLO(model_path)
 
-    input_directory = r"D:\dataset\176\train"
-    output_directory = r"D:\dataset\output1"
+    input_directory = r"D:\dataset\phone-car-test"
+    output_directory = r"D:\dataset\output5"
     custom_class_names = ["phone"]
 
     process_images_with_refinement(model, input_directory, output_directory,
                                    class_names=custom_class_names,
-                                   conf_threshold=0.55)
+                                   conf_threshold=0.2)

@@ -2,13 +2,26 @@ import os
 import random
 import shutil
 from tqdm import tqdm
+from ultralytics.models import YOLO
+"""
+remove_image_from_include_str(self, key: str):
+    若在folder_path文件夹下的图片名中有key字符，则移除该图片
+    
+copy_folder_to_src(self, src_folder_path: str, need_copy_folder: str)
+     # 将need_copy_folder文件夹中的文件复制到self.folder_path文件夹中
 
-"""train_folder_path = None, test_folder_path = None, valid_folder_path = None,
-train_images_path = None, test_images_path = None, valid_images_path = None, train_labels_path = None,
-test_labels_path = None, valid_labels_path = None"""
+clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,0,1]):
+    清理图片和标注文件的无效对应关系：
+    0. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
+    1. 删除没有对应标注文件的图片
+    2. 删除没有对应图片的标注文件
+    
+auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_thresh: float = 0.5)
+    output_label_dir输出txt标签的文件夹路径
+    conf_thresh: float, 置信度阈值,默认0.5,（过滤低置信度框）
+"""
 
-
-class TrainDatasetProcess(object):
+class DatasetProcess(object):
     image_end = (".jpg", ".jpeg", ".png", ".bmp")
 
     def __init__(self, folder_path=None):
@@ -39,64 +52,63 @@ class TrainDatasetProcess(object):
                 # 如果是文件，直接复制
                 shutil.copy2(dst_path, src_path)
 
-    def clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str):
+    def clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,0,1]):
         """
            清理图片和标注文件的无效对应关系：
-           1. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
-           2. 删除没有对应标注文件的图片
-           3. 删除没有对应图片的标注文件
+           0. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
+           1. 删除没有对应标注文件的图片
+           2. 删除没有对应图片的标注文件
        """
-        # 获取所有图片和标注文件名（去除扩展名）
         img_files = [f for f in os.listdir(img_dir) if os.path.splitext(f)[1].lower() in self.image_end]
         label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
 
         img_basenames = {os.path.splitext(f)[0] for f in img_files}
         label_basenames = {os.path.splitext(f)[0] for f in label_files}
+        if clean_rule[0]:
+            # --- Step 1: 删除空标注文件及其对应图片 ---
+            for label_file in label_files:
+                label_path = os.path.join(label_dir, label_file)
+                base_name = os.path.splitext(label_file)[0]
 
-        # --- Step 1: 删除空标注文件及其对应图片 ---
-        for label_file in label_files:
-            label_path = os.path.join(label_dir, label_file)
-            base_name = os.path.splitext(label_file)[0]
+                if os.path.getsize(label_path) == 0:
+                    print(f" 删除空标注文件: {label_path}")
+                    os.remove(label_path)
 
-            if os.path.getsize(label_path) == 0:
-                print(f" 删除空标注文件: {label_path}")
-                os.remove(label_path)
-
-                # 删除对应图片（匹配任意后缀）
-                for ext in self.image_end:
-                    img_path = os.path.join(img_dir, base_name + ext)
-                    if os.path.exists(img_path):
-                        print(f"️ 删除对应图片: {img_path}")
-                        os.remove(img_path)
-                        break
+                    # 删除对应图片（匹配任意后缀）
+                    for ext in self.image_end:
+                        img_path = os.path.join(img_dir, base_name + ext)
+                        if os.path.exists(img_path):
+                            print(f"️ 删除对应图片: {img_path}")
+                            os.remove(img_path)
+                            break
 
         # 重新获取有效文件列表（避免上一步删除后仍处理）
         img_files = [f for f in os.listdir(img_dir) if os.path.splitext(f)[1].lower() in self.image_end]
         label_files = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
         img_basenames = {os.path.splitext(f)[0] for f in img_files}
         label_basenames = {os.path.splitext(f)[0] for f in label_files}
-
-        # --- Step 2: 删除没有标注文件的图片 ---
-        for base_name in img_basenames - label_basenames:
-            for ext in self.image_end:
-                img_path = os.path.join(img_dir, base_name + ext)
-                if os.path.exists(img_path):
-                    print(f" 删除无标注图片: {img_path}")
-                    os.remove(img_path)
-                    break
-
-        # --- Step 3: 删除没有图片的标注文件 ---
-        for base_name in label_basenames - img_basenames:
-            label_path = os.path.join(label_dir, base_name + ".txt")
-            if os.path.exists(label_path):
-                print(f"️ 删除无图片标注文件: {label_path}")
-                os.remove(label_path)
+        if clean_rule[1]:
+            # --- Step 2: 删除没有标注文件的图片 ---
+            for base_name in img_basenames - label_basenames:
+                for ext in self.image_end:
+                    img_path = os.path.join(img_dir, base_name + ext)
+                    if os.path.exists(img_path):
+                        print(f" 删除无标注图片: {img_path}")
+                        os.remove(img_path)
+                        break
+        if clean_rule[2]:
+            # --- Step 3: 删除没有图片的标注文件 ---
+            for base_name in label_basenames - img_basenames:
+                label_path = os.path.join(label_dir, base_name + ".txt")
+                if os.path.exists(label_path):
+                    print(f"️ 删除无图片标注文件: {label_path}")
+                    os.remove(label_path)
 
         print(" 清理完成。")
 
     def split_to_train_valid_test(self, img_dir: str, label_dir: str, output_dir: str,
                                   split_list: list[float] = None, seed: int = 42
-                                  ) -> dict[str, tuple[int, int, int]]:
+                                  ):
         """
         将图片与标签分割为 train/val/test 三个集合。
         自动保持图片和标签一一对应。
@@ -203,21 +215,8 @@ class TrainDatasetProcess(object):
             print(f"{phase:5s}: 图片 {n_img}, 标签 {n_lbl}, 缺失标签 {n_miss}")
 
         print(f"输出路径: {os.path.abspath(output_dir)}\n")
-        return stats
 
     def auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_thresh: float = 0.5):
-        """
-        使用YOLOv8模型为未标注图片自动生成伪标签(txt格式)。
-        参数:
-            model_path: str
-                模型路径 (例如 'best.pt')
-            image_dir: str
-                未标注图片所在文件夹路径
-            output_label_dir: str
-                输出txt标签的文件夹路径
-            conf_thresh: float, 默认0.5
-                置信度阈值（过滤低置信度框）
-        """
         os.makedirs(output_label_dir, exist_ok=True)
         model = YOLO(model_path)
 
@@ -256,7 +255,8 @@ class TrainDatasetProcess(object):
         print(f" 生成标签目录: {output_label_dir}")
 
 
-s1 = TrainDatasetProcess()
-# s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels")
-s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels",
-                             output_dir=r"D:\dataset\phone-v5-1024",split_list=[0.7, 0.2, 0.1])
+s1 = DatasetProcess()
+# s1.auto_label(model_path=r"C:\Users\26601\Desktop\best.pt",image_dir=r"D:\dataset\train\0_phone",output_label_dir=r"D:\dataset\train\labels")
+s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car-121\images", label_dir=r"D:\dataset\phone-car-121\labels")
+# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels",
+#                              output_dir=r"D:\dataset\phone-v5-1024",split_list=[0.7, 0.2, 0.1])

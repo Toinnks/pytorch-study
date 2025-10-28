@@ -72,10 +72,12 @@ import matplotlib.pyplot as plt
 
 
 def analyze_boxes_structure():
-    model = YOLO('head.pt')
+    model = YOLO(r"C:\Users\26601\Desktop\best.pt")
     results = model('https://ultralytics.com/images/bus.jpg')
     r = results[0]
     boxes = r.boxes
+    names = r.names
+    print(f"names:{names}")
 
     print(f"boxes 类型: {type(boxes)}")
     print(f"boxes 是否可迭代: {hasattr(boxes, '__iter__')}")
@@ -128,4 +130,4 @@ def explain_box_formats():
     cv2.imwrite('custom_plot_result.jpg', orig_img)
 
 
-explain_box_formats()
+analyze_boxes_structure()

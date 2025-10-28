@@ -3,6 +3,7 @@ import random
 import shutil
 from tqdm import tqdm
 from ultralytics.models import YOLO
+
 """
 remove_image_from_include_str(self, key: str):
     若在folder_path文件夹下的图片名中有key字符，则移除该图片
@@ -19,7 +20,12 @@ clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,
 auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_thresh: float = 0.5)
     output_label_dir输出txt标签的文件夹路径
     conf_thresh: float, 置信度阈值,默认0.5,（过滤低置信度框）
+    
+label_change_class(self,label_dir: str, change_dict: dict)
+    改变标签的类别，change_dict={'0':'2','1':'4'}
+    会读取文件夹下的每一个txt文件的每行，对于类别0，会改为2……
 """
+
 
 class DatasetProcess(object):
     image_end = (".jpg", ".jpeg", ".png", ".bmp")
@@ -52,7 +58,7 @@ class DatasetProcess(object):
                 # 如果是文件，直接复制
                 shutil.copy2(dst_path, src_path)
 
-    def clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,0,1]):
+    def clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str, clean_rule: list = [0, 0, 1]):
         """
            清理图片和标注文件的无效对应关系：
            0. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
@@ -254,9 +260,52 @@ class DatasetProcess(object):
         print(" 自动标注完成！")
         print(f" 生成标签目录: {output_label_dir}")
 
+    def label_change_class(self,label_dir: str, change_dict: dict):
+        label_txt_list = [f for f in os.listdir(label_dir) if f.endswith(".txt")]
+        for i, filename in enumerate(label_txt_list):
+            file_path = os.path.join(label_dir, filename)
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            except Exception as e:
+                print(f"读取文件 {file_path} 失败，错误：{e}")
+                continue
+
+            new_lines = []
+            changed = False
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(' ', 1)
+                ori_class_name = parts[0]
+                rest_of_line = parts[1] if len(parts) > 1 else ""
+
+                new_class_name = change_dict.get(ori_class_name)
+                if new_class_name is None:
+                    print(f"[警告] 类映射错误：'{ori_class_name}' 未在 change_dict 中找到（文件: {filename}）")
+                    new_lines.append(line)
+                    continue
+
+                if new_class_name != ori_class_name:
+                    changed = True
+
+                new_lines.append(f"{new_class_name} {rest_of_line}")
+
+            if changed:
+                try:
+                    with open(file_path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(new_lines) + "\n")
+                    print(f"已更新: {filename}")
+                except Exception as e:
+                    print(f"写入文件失败: {file_path}, 错误: {e}")
+
+
 
 s1 = DatasetProcess()
+# s1.label_change_class(label_dir=r"D:\dataset\smoke\labels", change_dict={"3":"2"})
 # s1.auto_label(model_path=r"C:\Users\26601\Desktop\best.pt",image_dir=r"D:\dataset\train\0_phone",output_label_dir=r"D:\dataset\train\labels")
-s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car-121\images", label_dir=r"D:\dataset\phone-car-121\labels")
-# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-car\images", label_dir=r"D:\dataset\phone-car\labels",
-#                              output_dir=r"D:\dataset\phone-v5-1024",split_list=[0.7, 0.2, 0.1])
+# s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car-121\images", label_dir=r"D:\dataset\phone-car-121\labels")
+s1.split_to_train_valid_test(img_dir=r"D:\dataset\smoke\images", label_dir=r"D:\dataset\smoke\labels",
+                             output_dir=r"D:\dataset\smoke-1028",split_list=[0.8, 0.1, 0.1])

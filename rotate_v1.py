@@ -4,14 +4,15 @@ import os
 from pathlib import Path
 
 
-def rotate_yolo_data(images_folder, labels_folder, augment_set):
+def rotate_yolo_data(images_folder, labels_folder, augment_set, gray=False):
     """
-    对YOLO数据集进行旋转增强
+    对YOLO数据集进行旋转增强，并可选生成灰度图
 
     参数:
         images_folder: 图片文件夹路径
         labels_folder: 标签文件夹路径
         augment_set: 旋转角度列表，如 [60, 90, 120]
+        gray: 是否生成灰度图（默认为False）
     """
     images_folder = Path(images_folder)
     labels_folder = Path(labels_folder)
@@ -75,6 +76,19 @@ def rotate_yolo_data(images_folder, labels_folder, augment_set):
                         f.write(f"{box[0]} {box[1]:.6f} {box[2]:.6f} {box[3]:.6f} {box[4]:.6f}\n")
 
             print(f"已生成: {new_img_name}")
+
+        # --------- 灰度图部分 ---------
+        if gray:
+            gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray_name = f"{img_path.stem}-gray{img_path.suffix}"
+            gray_path = images_folder / gray_name
+            cv2.imwrite(str(gray_path), gray_img)
+
+            # 标签不变，直接复制
+            if label_path.exists():
+                gray_label = labels_folder / f"{img_path.stem}-gray.txt"
+                gray_label.write_text(label_path.read_text(), encoding="utf-8")
+            print(f"🩶 已生成灰度图: {gray_name}")
 
     print("数据增强完成！")
 
@@ -159,8 +173,8 @@ def rotate_yolo_boxes(boxes, M, orig_w, orig_h, new_w, new_h):
         # 转回YOLO格式
         new_x_center = ((x_min + x_max) / 2) / new_w
         new_y_center = ((y_min + y_max) / 2) / new_h
-        new_width = (x_max - x_min) / new_w
-        new_height = (y_max - y_min) / new_h
+        new_width = ((x_max - x_min) / new_w)*0.92
+        new_height = ((y_max - y_min) / new_h)*0.92
 
         # 过滤过小框
         if new_width > 0.01 and new_height > 0.01:
@@ -169,13 +183,11 @@ def rotate_yolo_boxes(boxes, M, orig_w, orig_h, new_w, new_h):
     return new_boxes
 
 
-
 # 使用示例
 if __name__ == "__main__":
-    # 设置路径
     images_folder = r"D:\dataset\phone-628\images"
     labels_folder = r"D:\dataset\phone-628\labels"
-    augment_set = [60, 90, 120]
+    augment_set = [72, 90, 105]
 
-    # 执行数据增强
-    rotate_yolo_data(images_folder, labels_folder, augment_set)
+    # 执行数据增强，生成灰度图
+    rotate_yolo_data(images_folder, labels_folder, augment_set, gray=True)

@@ -12,7 +12,8 @@ copy_folder_to_src(self, src_folder_path: str, need_copy_folder: str)
      # 将need_copy_folder文件夹中的文件复制到self.folder_path文件夹中
 
 clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,0,1]):
-    清理图片和标注文件的无效对应关系：
+    清理图片和标注文件：
+    clean_rule清理规则，[0,0,1]，分别对应下面三条，1为选中
     0. 删除空的标注文件 (.txt 大小为 0KB)，并删除对应图片
     1. 删除没有对应标注文件的图片
     2. 删除没有对应图片的标注文件
@@ -22,7 +23,7 @@ auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_th
     conf_thresh: float, 置信度阈值,默认0.5,（过滤低置信度框）
     
 label_change_class(self,label_dir: str, change_dict: dict)
-    改变标签的类别，change_dict={'0':'2','1':'4'}
+    改变标签的类别，映射关系为change_dict={'0':'2','1':'4'}
     会读取文件夹下的每一个txt文件的每行，对于类别0，会改为2……
 """
 
@@ -306,6 +307,6 @@ class DatasetProcess(object):
 s1 = DatasetProcess()
 # s1.label_change_class(label_dir=r"D:\dataset\smoke\labels", change_dict={"3":"2"})
 # s1.auto_label(model_path=r"C:\Users\26601\Desktop\best.pt",image_dir=r"D:\dataset\train\0_phone",output_label_dir=r"D:\dataset\train\labels")
-# s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-car-121\images", label_dir=r"D:\dataset\phone-car-121\labels")
-s1.split_to_train_valid_test(img_dir=r"D:\dataset\smoke\images", label_dir=r"D:\dataset\smoke\labels",
-                             output_dir=r"D:\dataset\smoke-1028",split_list=[0.8, 0.1, 0.1])
+# s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-545\images", label_dir=r"D:\dataset\phone-545\labels",clean_rule=[1,1,1])
+s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-3135\images", label_dir=r"D:\dataset\phone-3135\labels",
+                             output_dir=r"D:\dataset\phone-dataset-v7-1030",split_list=[0.7, 0.2, 0.1])

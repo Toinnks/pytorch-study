@@ -5,6 +5,80 @@ from pathlib import Path
 
 
 def rotate_yolo_data(images_folder, labels_folder, augment_set, gray=False):
+    def rotate_image(image, angle):
+        h, w = image.shape[:2]
+        center = (w // 2, h // 2)
+
+        # 获取旋转矩阵
+        M = cv2.getRotationMatrix2D(center, -angle, 1.0)
+
+        # 计算旋转后图片的尺寸
+        cos = np.abs(M[0, 0])
+        sin = np.abs(M[0, 1])
+        new_w = int((h * sin) + (w * cos))
+        new_h = int((h * cos) + (w * sin))
+
+        # 调整旋转矩阵以适应新尺寸
+        M[0, 2] += (new_w / 2) - center[0]
+        M[1, 2] += (new_h / 2) - center[1]
+
+        rotated = cv2.warpAffine(image, M, (new_w, new_h), borderValue=(114, 114, 114))
+
+        return rotated, M
+    def rotate_yolo_boxes(boxes, M, orig_w, orig_h, new_w, new_h):
+        """
+        使用旋转矩阵 M 旋转 YOLO 格式的边界框坐标
+        """
+        new_boxes = []
+
+        for box in boxes:
+            class_id = box[0]
+            x_center_norm, y_center_norm, width_norm, height_norm = box[1:5]
+
+            # 转为绝对坐标
+            x_center = x_center_norm * orig_w
+            y_center = y_center_norm * orig_h
+            width = width_norm * orig_w
+            height = height_norm * orig_h
+
+            # 四个角点
+            corners = np.array([
+                [x_center - width / 2, y_center - height / 2],
+                [x_center + width / 2, y_center - height / 2],
+                [x_center + width / 2, y_center + height / 2],
+                [x_center - width / 2, y_center + height / 2]
+            ])
+
+            # 添加一列1用于矩阵乘法
+            ones = np.ones((4, 1))
+            corners_hom = np.hstack([corners, ones])
+
+            # 应用旋转矩阵 M
+            rotated_corners = np.dot(M, corners_hom.T).T
+
+            # 计算新的框
+            x_min = np.min(rotated_corners[:, 0])
+            x_max = np.max(rotated_corners[:, 0])
+            y_min = np.min(rotated_corners[:, 1])
+            y_max = np.max(rotated_corners[:, 1])
+
+            # 边界限制
+            x_min = np.clip(x_min, 0, new_w)
+            x_max = np.clip(x_max, 0, new_w)
+            y_min = np.clip(y_min, 0, new_h)
+            y_max = np.clip(y_max, 0, new_h)
+
+            # 转回YOLO格式
+            new_x_center = ((x_min + x_max) / 2) / new_w
+            new_y_center = ((y_min + y_max) / 2) / new_h
+            new_width = ((x_max - x_min) / new_w) * 0.92
+            new_height = ((y_max - y_min) / new_h) * 0.92
+
+            # 过滤过小框
+            if new_width > 0.01 and new_height > 0.01:
+                new_boxes.append([class_id, new_x_center, new_y_center, new_width, new_height])
+
+        return new_boxes
     """
     对YOLO数据集进行旋转增强，并可选生成灰度图
 
@@ -93,97 +167,6 @@ def rotate_yolo_data(images_folder, labels_folder, augment_set, gray=False):
     print("数据增强完成！")
 
 
-def rotate_image(image, angle):
-    """
-    旋转图片
-
-    参数:
-        image: 输入图片
-        angle: 旋转角度（顺时针）
-
-    返回:
-        rotated_image: 旋转后的图片
-        M: 旋转矩阵
-    """
-    h, w = image.shape[:2]
-    center = (w // 2, h // 2)
-
-    # 获取旋转矩阵
-    M = cv2.getRotationMatrix2D(center, -angle, 1.0)
-
-    # 计算旋转后图片的尺寸
-    cos = np.abs(M[0, 0])
-    sin = np.abs(M[0, 1])
-    new_w = int((h * sin) + (w * cos))
-    new_h = int((h * cos) + (w * sin))
-
-    # 调整旋转矩阵以适应新尺寸
-    M[0, 2] += (new_w / 2) - center[0]
-    M[1, 2] += (new_h / 2) - center[1]
-
-    # 执行旋转
-    rotated = cv2.warpAffine(image, M, (new_w, new_h), borderValue=(114, 114, 114))
-
-    return rotated, M
-
-
-def rotate_yolo_boxes(boxes, M, orig_w, orig_h, new_w, new_h):
-    """
-    使用旋转矩阵 M 旋转 YOLO 格式的边界框坐标
-    """
-    new_boxes = []
-
-    for box in boxes:
-        class_id = box[0]
-        x_center_norm, y_center_norm, width_norm, height_norm = box[1:5]
-
-        # 转为绝对坐标
-        x_center = x_center_norm * orig_w
-        y_center = y_center_norm * orig_h
-        width = width_norm * orig_w
-        height = height_norm * orig_h
-
-        # 四个角点
-        corners = np.array([
-            [x_center - width / 2, y_center - height / 2],
-            [x_center + width / 2, y_center - height / 2],
-            [x_center + width / 2, y_center + height / 2],
-            [x_center - width / 2, y_center + height / 2]
-        ])
-
-        # 添加一列1用于矩阵乘法
-        ones = np.ones((4, 1))
-        corners_hom = np.hstack([corners, ones])
-
-        # 应用旋转矩阵 M
-        rotated_corners = np.dot(M, corners_hom.T).T
-
-        # 计算新的框
-        x_min = np.min(rotated_corners[:, 0])
-        x_max = np.max(rotated_corners[:, 0])
-        y_min = np.min(rotated_corners[:, 1])
-        y_max = np.max(rotated_corners[:, 1])
-
-        # 边界限制
-        x_min = np.clip(x_min, 0, new_w)
-        x_max = np.clip(x_max, 0, new_w)
-        y_min = np.clip(y_min, 0, new_h)
-        y_max = np.clip(y_max, 0, new_h)
-
-        # 转回YOLO格式
-        new_x_center = ((x_min + x_max) / 2) / new_w
-        new_y_center = ((y_min + y_max) / 2) / new_h
-        new_width = ((x_max - x_min) / new_w)*0.92
-        new_height = ((y_max - y_min) / new_h)*0.92
-
-        # 过滤过小框
-        if new_width > 0.01 and new_height > 0.01:
-            new_boxes.append([class_id, new_x_center, new_y_center, new_width, new_height])
-
-    return new_boxes
-
-
-# 使用示例
 if __name__ == "__main__":
     images_folder = r"D:\dataset\phone-628\images"
     labels_folder = r"D:\dataset\phone-628\labels"

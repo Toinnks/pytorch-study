@@ -3,10 +3,14 @@ import random
 import shutil
 from tqdm import tqdm
 from ultralytics.models import YOLO
+import xml.etree.ElementTree as ET
 
 """
-remove_image_from_include_str(self, key: str):
+remove_image_if_include_str(self, key: str):
     若在folder_path文件夹下的图片名中有key字符，则移除该图片
+    
+modify_image_name_if_include_str(self, key: str):
+    若在folder_path文件夹下的图片名中有key字符，则移除该字符
     
 copy_folder_to_src(self, src_folder_path: str, need_copy_folder: str)
      # 将need_copy_folder文件夹中的文件复制到self.folder_path文件夹中
@@ -19,12 +23,19 @@ clean_imgdir_and_labeldir(self, label_dir: str, img_dir: str,clean_rule:list=[0,
     2. 删除没有对应图片的标注文件
     
 auto_label(self, model_path: str, image_dir: str, output_label_dir: str, conf_thresh: float = 0.5)
+    用模型生成标签文件
     output_label_dir输出txt标签的文件夹路径
     conf_thresh: float, 置信度阈值,默认0.5,（过滤低置信度框）
     
 label_change_class(self,label_dir: str, change_dict: dict)
     改变标签的类别，映射关系为change_dict={'0':'2','1':'4'}
     会读取文件夹下的每一个txt文件的每行，对于类别0，会改为2……
+    
+convert_voc_to_yolo(self,xml_folder, txt_folder, classes)
+    voc格式（xml）的标签转txt,classes = ['smoke', 'person', 'cigarette']
+    
+rotate_yolo_data(self, images_folder, labels_folder, augment_set, gray=False)
+    数据增强，augment_set=[15,30,45],gray是否生成灰度图
 """
 
 
@@ -34,15 +45,39 @@ class DatasetProcess(object):
     def __init__(self, folder_path=None):
         self.folder_path = folder_path
 
-    def remove_image_from_include_str(self, key: str):
+    def remove_image_if_include_str(self,folder_path:str,key: str):
         # 若在folder_path文件夹下的图片名中有key字符，则移除该图片
-        folder_path = self.folder_path
+
         for filename in os.listdir(folder_path):
             if key in filename:
                 file_path = os.path.join(folder_path, filename)
                 os.remove(file_path)
                 print(f"已删除: {filename}")
         print(f"{folder_path}清理完成！")
+
+
+    def modify_image_name_if_include_str(self,folder_path:str, key: str):
+        renamed_count = 0  # 记录重命名的文件数量
+
+        # 遍历文件夹中的所有文件
+        for filename in os.listdir(folder_path):
+            if key in filename:
+                old_file_path = os.path.join(folder_path, filename)
+                # 将文件名中的 key 替换为空字符串，即删除 key
+                new_filename = filename.replace(key, "")
+                new_file_path = os.path.join(folder_path, new_filename)
+
+                # 检查新文件名是否已存在，避免覆盖
+                if os.path.exists(new_file_path):
+                    print(f"跳过重命名: {filename} -> {new_filename} (目标文件已存在)")
+                    continue
+
+                # 重命名文件
+                os.rename(old_file_path, new_file_path)
+                print(f"已重命名: {filename} -> {new_filename}")
+                renamed_count += 1
+
+        print(f"{folder_path} 重命名完成！共处理 {renamed_count} 个文件。")
 
     def copy_folder_to_src(self, src_folder_path: str, need_copy_folder: str):
 
@@ -299,7 +334,7 @@ class DatasetProcess(object):
                 except Exception as e:
                     print(f"写入文件失败: {file_path}, 错误: {e}")
 
-    def rotate_yolo_data(self,images_folder, labels_folder, augment_set, gray=False):
+    def rotate_yolo_data(self, images_folder, labels_folder, augment_set, gray=False):
         def rotate_image(image, angle):
             h, w = image.shape[:2]
             center = (w // 2, h // 2)
@@ -463,9 +498,66 @@ class DatasetProcess(object):
 
         print("数据增强完成！")
 
+    def convert_voc_to_yolo(self, xml_folder, txt_folder, classes):
+        """
+        将VOC格式的XML标注文件转换为YOLO格式的TXT标注文件。
+
+        参数:
+            xml_folder: str, XML文件所在文件夹路径
+            txt_folder: str, 输出TXT文件夹路径
+            classes: list[str], 类别名称列表，如 ['smoke', 'person']
+        """
+        if not os.path.exists(txt_folder):
+            os.makedirs(txt_folder)
+
+        for xml_file in os.listdir(xml_folder):
+            if not xml_file.endswith(".xml"):
+                continue
+
+            xml_path = os.path.join(xml_folder, xml_file)
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+
+            # 图像尺寸
+            size = root.find("size")
+            width = int(size.find("width").text)
+            height = int(size.find("height").text)
+
+            # 输出文件路径（与图片名一致）
+            txt_name = os.path.splitext(xml_file)[0] + ".txt"
+            txt_path = os.path.join(txt_folder, txt_name)
+
+            with open(txt_path, "w") as f:
+                for obj in root.findall("object"):
+                    cls_name = obj.find("name").text
+                    if cls_name not in classes:
+                        print(f"未知类别: {cls_name}，已跳过。")
+                        continue
+                    cls_id = classes.index(cls_name)
+
+                    xml_box = obj.find("bndbox")
+                    xmin = float(xml_box.find("xmin").text)
+                    ymin = float(xml_box.find("ymin").text)
+                    xmax = float(xml_box.find("xmax").text)
+                    ymax = float(xml_box.find("ymax").text)
+
+                    # 计算中心点和宽高，并归一化
+                    x_center = (xmin + xmax) / 2.0 / width
+                    y_center = (ymin + ymax) / 2.0 / height
+                    box_width = (xmax - xmin) / width
+                    box_height = (ymax - ymin) / height
+
+                    f.write(f"{cls_id} {x_center:.6f} {y_center:.6f} {box_width:.6f} {box_height:.6f}\n")
+
+        print(f"已完成转换，共生成 {len(os.listdir(txt_folder))} 个txt标注文件。")
+
+
 s1 = DatasetProcess()
 # s1.label_change_class(label_dir=r"D:\dataset\smoke\labels", change_dict={"3":"2"})
 # s1.auto_label(model_path=r"C:\Users\26601\Desktop\best.pt",image_dir=r"D:\dataset\train\0_phone",output_label_dir=r"D:\dataset\train\labels")
 # s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-545\images", label_dir=r"D:\dataset\phone-545\labels",clean_rule=[1,1,1])
-s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-3135\images", label_dir=r"D:\dataset\phone-3135\labels",
-                             output_dir=r"D:\dataset\phone-dataset-v7-1030", split_list=[0.7, 0.2, 0.1])
+# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-3135\images", label_dir=r"D:\dataset\phone-3135\labels",
+#                              output_dir=r"D:\dataset\phone-dataset-v7-1030", split_list=[0.7, 0.2, 0.1])
+# s1.convert_voc_to_yolo(r"D:\edgeDownloads\pp_smoke\Annotations", r"D:\edgeDownloads\pp_smoke\lables",
+#                        classes=['smoke'])
+s1.modify_image_name_if_include_str(r"C:\Users\26601\Desktop\test_phone","浙")

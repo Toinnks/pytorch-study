@@ -300,12 +300,12 @@ def process_images_with_refinement(model, input_dir, output_dir, class_names=Non
 
 
 if __name__ == "__main__":
-    model_path = r"C:\Users\26601\Desktop\train-9.pt"  # 替换为你的模型路径
+    model_path = r"C:\Users\26601\Desktop\phone.pt"  # 替换为你的模型路径
     model = YOLO(model_path)
 
-    input_directory = r"D:\dataset\output_images_gray"
-    output_directory = r"D:\dataset\trained-9_de_smoke"
-    custom_class_names = ['Open Eye','Closed Eye','Cigarette','Phone','Seatbelt']
+    input_directory = r"C:\Users\26601\Desktop\test_phone"
+    output_directory = r"C:\Users\26601\Desktop\test_phone_output"
+    custom_class_names = ['phone']
 
     process_images_with_refinement(model, input_directory, output_directory,
                                    class_names=custom_class_names,

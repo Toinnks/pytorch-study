@@ -32,14 +32,14 @@ logging.basicConfig(
 )
 batch_size = 3
 
-model1 = YOLO(r"C:\Users\26601\Desktop\best.pt")
+model1 = YOLO(r"C:\Users\26601\Desktop\phone.pt")
 model2 = YOLO("head.pt")
 
 
 # video_streams是一个字典，用来存储视频流编号和流信息,key是该视频流的名称，值是一个VideoStream对象
 class VideoStream:
     def __init__(self, video_stream_rtsp_url=None, video_link_time=None, video_desc=None,
-                 video_source=None, conf=0.5, video_alarm_diff=300):
+                 video_source=None, conf=0.7, video_alarm_diff=300):
         self.video_stream_rtsp_url = video_stream_rtsp_url
         self.video_alarm_time = None
         self.video_link_time = video_link_time
@@ -54,7 +54,7 @@ class VideoStream:
         self.video_link_time = None
         self.video_desc = None
         self.video_source = None
-        self.conf = 0.5
+        self.conf = 0.7
         self.video_alarm_diff = 300
 
 
@@ -275,8 +275,8 @@ def detect_video_stream(video_streams, video_readers):
                     else:
                         logging.info(f'{key}读的一帧错误')
                     time.sleep(1)
-                logging.info(f'一轮读取完成，等待5秒')
-                time.sleep(5)
+                logging.info(f'一轮读取完成，等待3秒')
+                time.sleep(3)
             else:
                 logging.info('当前没有视频流，等待10秒')
                 time.sleep(10)

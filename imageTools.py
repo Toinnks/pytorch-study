@@ -1,6 +1,10 @@
 import os
 import random
 import shutil
+from pathlib import Path
+
+import cv2
+import numpy as np
 from tqdm import tqdm
 from ultralytics.models import YOLO
 import xml.etree.ElementTree as ET
@@ -149,11 +153,10 @@ class DatasetProcess(object):
         print(" 清理完成。")
 
     def split_to_train_valid_test(self, img_dir: str, label_dir: str, output_dir: str,
-                                  split_list: list[float] = None, seed: int = 42
-                                  ):
+                                  split_list: list[float] = None, seed: int = 42):
         """
         将图片与标签分割为 train/val/test 三个集合。
-        自动保持图片和标签一一对应。
+        自动保持图片和标签一一对应（允许无标签图片作为负样本）。
 
         参数：
             img_dir: 图片文件夹路径
@@ -189,17 +192,13 @@ class DatasetProcess(object):
                      os.path.join(output_dir, "test/labels")),
         }
 
-        # 收集所有有效图片（必须有对应标签）
-        all_images = []
-        for f in os.listdir(img_dir):
-            if f.lower().endswith(tuple(self.image_end)):
-                name = os.path.splitext(f)[0]
-                label_path = os.path.join(label_dir, name + ".txt")
-                if os.path.exists(label_path):
-                    all_images.append(os.path.join(img_dir, f))
+        # 收集所有图片（无论是否有标签，均保留）
+        all_images = [os.path.join(img_dir, f)
+                      for f in os.listdir(img_dir)
+                      if f.lower().endswith(tuple(self.image_end))]
 
         if not all_images:
-            raise RuntimeError("未找到任何有对应标签的图片")
+            raise RuntimeError("未找到任何图片文件")
 
         # 随机打乱
         random.seed(seed)
@@ -228,7 +227,7 @@ class DatasetProcess(object):
                     print(f"[{phase}] 复制图片失败: {img_path} -> {e}")
                     continue
 
-                # 标签
+                # 标签（有则复制，无则跳过）
                 name = os.path.splitext(os.path.basename(img_path))[0]
                 lbl_path = os.path.join(label_dir, name + ".txt")
                 if os.path.exists(lbl_path):
@@ -238,8 +237,7 @@ class DatasetProcess(object):
                     except Exception as e:
                         print(f"[{phase}] 复制标签失败: {lbl_path} -> {e}")
                 else:
-                    lbl_missing += 1
-                    print(f"[{phase}] 警告：缺少标签文件 -> {lbl_path}")
+                    lbl_missing += 1  # 无标签计数但不生成空文件
 
             return img_copied, lbl_copied, lbl_missing
 
@@ -251,7 +249,7 @@ class DatasetProcess(object):
 
         print("\n=== 数据集分割完成 ===")
         for phase, (n_img, n_lbl, n_miss) in stats.items():
-            print(f"{phase:5s}: 图片 {n_img}, 标签 {n_lbl}, 缺失标签 {n_miss}")
+            print(f"{phase:5s}: 图片 {n_img}, 标签 {n_lbl}, 无标签(负样本) {n_miss}")
 
         print(f"输出路径: {os.path.abspath(output_dir)}\n")
 
@@ -334,7 +332,7 @@ class DatasetProcess(object):
                 except Exception as e:
                     print(f"写入文件失败: {file_path}, 错误: {e}")
 
-    def rotate_yolo_data(self, images_folder, labels_folder, augment_set, gray=False):
+    def rotate_yolo_data(self, images_folder,labels_folder, augment_set:list, gray=False):
         def rotate_image(image, angle):
             h, w = image.shape[:2]
             center = (w // 2, h // 2)
@@ -494,7 +492,7 @@ class DatasetProcess(object):
                 if label_path.exists():
                     gray_label = labels_folder / f"{img_path.stem}-gray.txt"
                     gray_label.write_text(label_path.read_text(), encoding="utf-8")
-                print(f"🩶 已生成灰度图: {gray_name}")
+                print(f"已生成灰度图: {gray_name}")
 
         print("数据增强完成！")
 
@@ -556,8 +554,9 @@ s1 = DatasetProcess()
 # s1.label_change_class(label_dir=r"D:\dataset\smoke\labels", change_dict={"3":"2"})
 # s1.auto_label(model_path=r"C:\Users\26601\Desktop\best.pt",image_dir=r"D:\dataset\train\0_phone",output_label_dir=r"D:\dataset\train\labels")
 # s1.clean_imgdir_and_labeldir(img_dir=r"D:\dataset\phone-545\images", label_dir=r"D:\dataset\phone-545\labels",clean_rule=[1,1,1])
-# s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-3135\images", label_dir=r"D:\dataset\phone-3135\labels",
-#                              output_dir=r"D:\dataset\phone-dataset-v7-1030", split_list=[0.7, 0.2, 0.1])
+s1.split_to_train_valid_test(img_dir=r"D:\dataset\phone-628\images", label_dir=r"D:\dataset\phone-628\labels",
+                             output_dir=r"D:\dataset\phone-dataset-v8-1104", split_list=[0.7, 0.2, 0.1])
 # s1.convert_voc_to_yolo(r"D:\edgeDownloads\pp_smoke\Annotations", r"D:\edgeDownloads\pp_smoke\lables",
 #                        classes=['smoke'])
-s1.modify_image_name_if_include_str(r"C:\Users\26601\Desktop\test_phone","浙")
+# s1.modify_image_name_if_include_str(r"C:\Users\26601\Desktop\test_phone","浙")
+# s1.rotate_yolo_data(images_folder=r"D:\dataset\phone-628\images",labels_folder=r"D:\dataset\phone-628\labels",augment_set=[75,90,105],gray=True)

@@ -300,13 +300,13 @@ def process_images_with_refinement(model, input_dir, output_dir, class_names=Non
 
 
 if __name__ == "__main__":
-    model_path = r"C:\Users\26601\Desktop\phone.pt"  # 替换为你的模型路径
+    model_path = r"C:\Users\26601\Desktop\phone_n.pt"  # 替换为你的模型路径
     model = YOLO(model_path)
 
-    input_directory = r"C:\Users\26601\Desktop\test_phone"
-    output_directory = r"C:\Users\26601\Desktop\test_phone_output"
+    input_directory = r"C:\Users\26601\Desktop\phone_test_new"
+    output_directory = r"C:\Users\26601\Desktop\phone_output_n"
     custom_class_names = ['phone']
 
     process_images_with_refinement(model, input_directory, output_directory,
                                    class_names=custom_class_names,
-                                   conf_threshold=0.6)
+                                   conf_threshold=0.1)
